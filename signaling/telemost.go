@@ -16,13 +16,12 @@ import (
 var _ SignalingClient = (*TelemostSignaling)(nil)
 
 type TelemostSignaling struct {
-	Options         option.TelemostSignalingOptions
-	Conn            *websocket.Conn
-	ConnMutex       sync.Mutex
-	ServerHelloChan chan struct{}
-	ServerHello     *ServerHelloMessage
-	Backlog         []string
-	BacklogMutex    sync.Mutex
+	Options            option.TelemostSignalingOptions
+	Conn               *websocket.Conn
+	ConnMutex          sync.Mutex
+	ServerHelloChannel chan struct{}
+	ServerHello        *ServerHelloMessage
+	TokenChannel       chan Token
 }
 
 type ClientConfiguration struct {
@@ -48,8 +47,9 @@ type RTCConfiguration struct {
 	ICEServers []ICEServer `json:"iceServers"`
 }
 
-type Meta struct {
-	Meta ParticipantMeta `json:"meta"`
+type Description struct {
+	Meta           ParticipantMeta `json:"meta"`
+	DisconnectedAt *uint64         `json:"disconnectedAt,omitempty"`
 }
 
 type Status struct {
@@ -88,7 +88,7 @@ type UpdateMeMessage struct {
 }
 
 type UpsertDescriptionMessage struct {
-	Description []Meta `json:"description"`
+	Description []Description `json:"description"`
 }
 
 type ACKMessage struct {
@@ -100,8 +100,9 @@ type EmptyMessage struct {
 
 func NewTelemostSignaling(options option.TelemostSignalingOptions) TelemostSignaling {
 	return TelemostSignaling{
-		Options:         options,
-		ServerHelloChan: make(chan struct{}),
+		Options:            options,
+		ServerHelloChannel: make(chan struct{}),
+		TokenChannel:       make(chan Token),
 	}
 }
 
@@ -119,16 +120,26 @@ func (c *TelemostSignaling) onMessage() {
 			return
 		}
 
+		serverHello := false
 		if message.ServerHello != nil {
-			c.ServerHello = message.ServerHello
-			c.ServerHelloChan <- struct{}{}
-			go c.ping()
+			serverHello = true
 		} else if message.UpsertDescription != nil {
-			c.BacklogMutex.Lock()
 			for _, desc := range message.UpsertDescription.Description {
-				c.Backlog = append(c.Backlog, desc.Meta.Name)
+				if desc.DisconnectedAt != nil {
+					continue
+				}
+				rawToken := desc.Meta.Name
+				if rawToken == "wrtcg-server" || rawToken == "wrtcg-client" {
+					continue
+				}
+				token := Token{}
+				err := token.Decode(rawToken)
+				if err == nil {
+					c.TokenChannel <- token
+				} else {
+					fmt.Println(err)
+				}
 			}
-			c.BacklogMutex.Unlock()
 		}
 
 		if message.ACK == nil {
@@ -143,6 +154,11 @@ func (c *TelemostSignaling) onMessage() {
 			})
 			if err != nil {
 				return
+			}
+			if serverHello {
+				c.ServerHello = message.ServerHello
+				c.ServerHelloChannel <- struct{}{}
+				go c.ping()
 			}
 		}
 	}
@@ -215,16 +231,23 @@ func (c *TelemostSignaling) Dial(name string) error {
 	return nil
 }
 
-func (c *TelemostSignaling) ReceiveOffers() ([]string, error) {
-	backlog := c.Backlog
-	c.BacklogMutex.Lock()
-	c.Backlog = make([]string, 0)
-	c.BacklogMutex.Unlock()
-	return backlog, nil
+func (c *TelemostSignaling) GetTokenChannel() chan Token {
+	return c.TokenChannel
 }
 
-func (c *TelemostSignaling) SendAnswer(oid uint64, answer string) error {
-	return nil
+func (c *TelemostSignaling) SendToken(token Token) error {
+	return c.writeJson(WSMessage{
+		UID: uuid.NewString(),
+		UpdateMe: &UpdateMeMessage{
+			ParticipantMeta: ParticipantMeta{
+				Name:        token.Encode(),
+				Role:        "SPEAKER",
+				Description: "",
+				SendAudio:   false,
+				SendVideo:   false,
+			},
+		},
+	})
 }
 
 func (c *TelemostSignaling) GetIceServers() ([]ICEServer, error) {

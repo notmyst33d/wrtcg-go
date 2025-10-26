@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/notmyst33d/wrtcg-go/v2/debug"
 	"github.com/notmyst33d/wrtcg-go/v2/option"
 	"github.com/notmyst33d/wrtcg-go/v2/signaling"
 )
@@ -25,21 +24,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	if config.PrivateKey == nil {
-		fmt.Println("cannot find private key in config")
+	if config.PublicKey == nil {
+		fmt.Println("cannot find public key in config")
 		os.Exit(1)
 	}
 
 	if config.Signaling.Type == "telemost" {
 		client := signaling.NewTelemostSignaling(config.Signaling.TelemostOptions)
-		err = client.Dial("wrtcg-server")
+		err = client.Dial("wrtcg-client")
 		if err != nil {
 			fmt.Println("cannot start signaling client:", err)
 		}
 		<-client.ServerHelloChannel
 		for {
-			token := <-client.GetTokenChannel()
-			debug.Inspect(token)
+			client.SendToken(signaling.Token{
+				RequestID: 0,
+				SDP:       "test",
+				TokenType: "offer",
+				Signature: "",
+			})
 			time.Sleep(time.Second)
 		}
 	}

@@ -16,7 +16,3 @@ type PollingData struct {
 	IceServers []ICEServer        `json:"ice_servers"`
 	Signaling  []SignalingPayload `json:"signaling"`
 }
-
-func EncodeOffer(sdp string) {
-
-}

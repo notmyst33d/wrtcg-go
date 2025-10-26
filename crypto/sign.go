@@ -20,6 +20,3 @@ func PublicKeyFromBase64(key string) (ed25519.PublicKey, error) {
 	}
 	return ed25519.PublicKey(data), nil
 }
-
-func SignAnswer() {
-}
